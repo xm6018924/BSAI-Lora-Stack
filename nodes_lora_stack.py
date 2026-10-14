@@ -182,7 +182,8 @@ class BSAI_Lora_Stack:
                     cur = _v_load(cur, lora_path, strength)
                     print(f"[BSAI_Lora_Stack] 已叠加 lora{i} [viggle官方注入]: {name} (strength={strength})")
                 else:
-                    cur, _ = load_lora_for_models(cur, None, lora_path, strength, strength)
+                    sd = comfy.utils.load_torch_file(lora_path, safe_load=True)
+                    cur, _ = load_lora_for_models(cur, None, sd, strength, strength)
                     print(f"[BSAI_Lora_Stack] 已叠加 lora{i} [standard合并]: {name} (strength={strength})")
                 applied += 1
             except Exception as e:

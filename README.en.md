@@ -45,3 +45,7 @@ Restart ComfyUI, then search `BSAI LoRA 集` in the node palette (category: load
 
 - ComfyUI (0.38 or newer)
 - PyTorch + torch.nn.functional (needed for the `viggle` runtime-injection mode)
+
+## License
+
+[MIT](LICENSE)

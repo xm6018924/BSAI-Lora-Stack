@@ -38,4 +38,10 @@ ComfyUI\custom_nodes\BSAI-Lora-Stack
 ## 文件
 
 - `nodes_lora_stack.py` — 节点实现
+- `web/js/lora_stack.js` — 前端按 `lora_count` 动态显示/隐藏行
 - `__init__.py` — 注册入口
+- `LICENSE` — MIT 许可
+
+## 许可证
+
+[MIT](LICENSE)

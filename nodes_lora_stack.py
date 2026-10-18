@@ -107,14 +107,14 @@ class BSAI_Lora_Stack:
             "model": ("MODEL",),
             "master_enable": ("BOOLEAN", {
                 "default": True,
-                "label_on": "启用(全部)",
-                "label_off": "停用(跳过全部)",
-                "tooltip": "节点总开关：关闭时跳过全部 LoRA，直接输出输入模型（等价整节点 bypass）。",
+                "label_on": "Enable (all)",
+                "label_off": "Disable (skip all)",
+                "tooltip": "Master switch: when off, all LoRAs are skipped and the input model is passed through unchanged (equivalent to bypassing the whole node).",
             }),
             "lora_count": ("INT", {
                 "default": 3, "min": 1, "max": LORA_MAX, "step": 1,
-                "tooltip": f"生效 LoRA 路数（1~{LORA_MAX}）：默认 3，需要第 4 个 LoRA 时改为 4；"
-                           "前端只显示前 N 行，其余自动隐藏。",
+                "tooltip": f"Number of active LoRA slots (1~{LORA_MAX}): default 3; raise to 4 when you need a 4th LoRA. "
+                           "Only the first N rows are shown; the rest are hidden automatically.",
             }),
         }
         optional = {}
@@ -122,22 +122,22 @@ class BSAI_Lora_Stack:
         for i in range(1, LORA_MAX + 1):
             optional[f"lora{i}_enable"] = ("BOOLEAN", {
                 "default": i <= 3,  # 默认开启前 3 路，更多路由用户按需打开（即「自行添加」）
-                "label_on": "开",
-                "label_off": "关",
-                "tooltip": f"第 {i} 路 LoRA 启用开关（默认前 3 路开启，需要更多路时打开对应开关即可添加）。",
+                "label_on": "On",
+                "label_off": "Off",
+                "tooltip": f"Enable switch for LoRA slot {i} (first 3 slots on by default; turn on a slot to add more LoRAs).",
             })
             optional[f"lora{i}_name"] = (loras, {
                 "default": "None",
-                "tooltip": f"第 {i} 路 LoRA 模型（下拉自 loras 目录，随目录刷新）。",
+                "tooltip": f"LoRA model for slot {i} (dropdown from the loras folder; refreshes with the directory).",
             })
             optional[f"lora{i}_mode"] = (["standard", "viggle"], {
                 "default": "standard",
-                "tooltip": "standard=权重合并（LoraLoaderModelOnly 语义）；"
-                           "viggle=官方运行时注入 y=Wx+BAx（不融合权重，Viggle/蒸馏 LoRA 在 bf16/int8 下无损）。",
+                "tooltip": "standard = weight merge (LoraLoaderModelOnly semantics, for ordinary LoRAs); "
+                           "viggle = official runtime injection y=Wx+BAx (weights are not merged; lossless for Viggle/distilled LoRAs under bf16/int8).",
             })
             optional[f"lora{i}_strength"] = ("FLOAT", {
                 "default": 1.0, "min": -4.0, "max": 4.0, "step": 0.01, "round": 0.01,
-                "tooltip": f"第 {i} 路 LoRA 权重（0 视为跳过；负值反向）。",
+                "tooltip": f"Weight for LoRA slot {i} (0 is treated as skipped; negative reverses the effect).",
             })
         return {"required": required, "optional": optional}
 
@@ -146,10 +146,10 @@ class BSAI_Lora_Stack:
     FUNCTION = "apply"
     CATEGORY = "loaders/BSAI"
     DESCRIPTION = (
-        "BSAI LoRA 集：一次串联加载最多 12 路 LoRA。"
-        "每路独立「开关 + 模型 + 加载方式(standard/viggle) + 权重」，"
-        "viggle 方式内置官方运行时注入语义（无需再接 ViggleTurboLora 节点）；"
-        "节点级 master_enable 总开关可整体跳过；输出 MODEL 接入采样器或继续叠加 LoRA。"
+        "BSAI LoRA Stack: chain-load up to 12 LoRAs in a single node. "
+        "Each slot is independent (enable + model + load mode (standard/viggle) + strength). "
+        "The viggle mode embeds the official runtime-injection semantics (no separate ViggleTurboLora node needed); "
+        "the node-level master_enable switch skips everything; output MODEL can feed a sampler or stack further LoRA nodes."
     )
 
     def apply(self, model, master_enable, **kwargs):
@@ -178,7 +178,7 @@ class BSAI_Lora_Stack:
             try:
                 if mode == "viggle":
                     if _v_load is None:
-                        raise RuntimeError("依赖 torch/comfy 不可用，无法使用 viggle 加载方式")
+                        raise RuntimeError("torch/comfy dependencies unavailable; cannot use viggle load mode")
                     cur = _v_load(cur, lora_path, strength)
                     print(f"[BSAI_Lora_Stack] 已叠加 lora{i} [viggle官方注入]: {name} (strength={strength})")
                 else:
@@ -199,5 +199,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "BSAI_Lora_Stack": "BSAI LoRA 集",
+    "BSAI_Lora_Stack": "BSAI LoRA Stack",
 }

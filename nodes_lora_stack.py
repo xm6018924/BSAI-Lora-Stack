@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-BSAI LoRA 集（BSAI-Lora-Stack）
+BSAI LoRA 集（BSAI-Lora-Stack）—— 对齐 ComfyUI 0.41 官方 LoRA 堆叠语义
 
 一个节点串联加载多条 LoRA：
-  - 最多 12 路 LoRA，每路独立：启用开关 / 权重 / 模型选择 / 加载方式
+  - 最多 12 路 LoRA，每路独立：启用开关 / 权重 / 模型选择 / 加载方式 / 文本编码器强度
   - 加载方式 standard = 权重合并（LoraLoaderModelOnly 语义，适用普通 LoRA）
   - 加载方式 viggle   = 官方 ViggleTurbo 运行时注入（y=Wx+BAx，不融合权重，
                         对 bf16 合并损失 ~30% 更新、int8 合并引入 ~4x 噪声的场景无损）
   - 节点总开关 master_enable：关闭时整体跳过（等价于节点 bypass，输出原模型）
-  - 输出 MODEL，可直接接入采样器 / 继续叠加其他 LoRA 节点（含 ViggleTurboLora）
+  - 对齐官方 "Load LoRA (Model)" + "Load LoRA (Text Encoder)" 双通道语义：
+    接入可选 clip 后，standard 档同时把每路 LoRA 按 lora{i}_clip_strength 施加到
+    CLIP 文本编码器，输出 CLIP；viggle 档为扩散模型专用，clip 原样透传
+  - 输出 MODEL + CLIP，可直接接入采样器 / 继续叠加其他 LoRA 节点（含 ViggleTurboLora）
 """
 import json
 import os
@@ -117,7 +120,13 @@ class BSAI_Lora_Stack:
                            "Only the first N rows are shown; the rest are hidden automatically.",
             }),
         }
-        optional = {}
+        optional = {
+            "clip": ("CLIP", {
+                "tooltip": "Optional CLIP text encoder. When connected, standard-mode LoRAs are also applied to it "
+                           "with each slot's clip_strength (mirrors the official Load LoRA (Text Encoder) stack). "
+                           "viggle-mode LoRAs are diffusion-model only and pass the CLIP through unchanged.",
+            }),
+        }
         loras = _lora_names()
         for i in range(1, LORA_MAX + 1):
             optional[f"lora{i}_enable"] = ("BOOLEAN", {
@@ -137,27 +146,36 @@ class BSAI_Lora_Stack:
             })
             optional[f"lora{i}_strength"] = ("FLOAT", {
                 "default": 1.0, "min": -4.0, "max": 4.0, "step": 0.01, "round": 0.01,
-                "tooltip": f"Weight for LoRA slot {i} (0 is treated as skipped; negative reverses the effect).",
+                "tooltip": f"Weight for LoRA slot {i} on the diffusion model (0 is treated as skipped; negative reverses the effect).",
+            })
+        # clip_strength 统一放在所有槽之后（兼容旧版存档：旧 50 个值仍精确映射 2+12*4 槽，新增列全部落到尾部缺省）
+        for i in range(1, LORA_MAX + 1):
+            optional[f"lora{i}_clip_strength"] = ("FLOAT", {
+                "default": 1.0, "min": -4.0, "max": 4.0, "step": 0.01, "round": 0.01,
+                "tooltip": f"Weight for LoRA slot {i} on the CLIP text encoder (standard mode only; ignored when clip is not connected or mode=viggle).",
             })
         return {"required": required, "optional": optional}
 
-    RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("MODEL",)
+    RETURN_TYPES = ("MODEL", "CLIP")
+    RETURN_NAMES = ("MODEL", "CLIP")
     FUNCTION = "apply"
     CATEGORY = "loaders/BSAI"
     DESCRIPTION = (
-        "BSAI LoRA Stack: chain-load up to 12 LoRAs in a single node. "
-        "Each slot is independent (enable + model + load mode (standard/viggle) + strength). "
-        "The viggle mode embeds the official runtime-injection semantics (no separate ViggleTurboLora node needed); "
-        "the node-level master_enable switch skips everything; output MODEL can feed a sampler or stack further LoRA nodes."
+        "BSAI LoRA Stack: chain-load up to 12 LoRAs in a single node, aligned with the "
+        "official ComfyUI LoRA stack semantics (Load LoRA (Model) + Load LoRA (Text Encoder)). "
+        "Each slot is independent (enable + model + load mode (standard/viggle) + strength + "
+        "clip_strength). Connect a CLIP to also apply standard-mode LoRAs to the text encoder. "
+        "The viggle mode embeds the official runtime-injection semantics (diffusion model only); "
+        "the node-level master_enable switch skips everything; outputs MODEL + CLIP."
     )
 
-    def apply(self, model, master_enable, **kwargs):
+    def apply(self, model, master_enable, clip=None, **kwargs):
         if not master_enable:
-            print("[BSAI_Lora_Stack] master_enable=False → 跳过全部 LoRA，输出原模型")
-            return (model,)
+            print("[BSAI_Lora_Stack] master_enable=False → 跳过全部 LoRA，输出原模型/CLIP")
+            return (model, clip)
 
         cur = model
+        cur_clip = clip
         applied = 0
         limit = int(kwargs.get("lora_count", 3) or 3)
         limit = max(1, min(LORA_MAX, limit))
@@ -166,6 +184,7 @@ class BSAI_Lora_Stack:
             name = kwargs.get(f"lora{i}_name", "None") or "None"
             mode = kwargs.get(f"lora{i}_mode", "standard") or "standard"
             strength = kwargs.get(f"lora{i}_strength", 0.0) or 0.0
+            clip_strength = kwargs.get(f"lora{i}_clip_strength", 1.0) or 0.0
             if not en or name == "None" or strength == 0.0:
                 continue
             try:
@@ -182,16 +201,17 @@ class BSAI_Lora_Stack:
                     cur = _v_load(cur, lora_path, strength)
                     print(f"[BSAI_Lora_Stack] 已叠加 lora{i} [viggle官方注入]: {name} (strength={strength})")
                 else:
-                    sd = comfy.utils.load_torch_file(lora_path, safe_load=True)
-                    cur, _ = load_lora_for_models(cur, None, sd, strength, strength)
-                    print(f"[BSAI_Lora_Stack] 已叠加 lora{i} [standard合并]: {name} (strength={strength})")
+                    sd, lora_meta = comfy.utils.load_torch_file(lora_path, safe_load=True, return_metadata=True)
+                    # 对齐官方 CORE-186 原生 LoRA Stack：传递 lora_metadata（metadata 化 LoRA / 用途信息 attach）
+                    cur, cur_clip = load_lora_for_models(cur, cur_clip, sd, strength, clip_strength if cur_clip is not None else 0.0, lora_metadata=lora_meta)
+                    print(f"[BSAI_Lora_Stack] 已叠加 lora{i} [standard合并]: {name} (strength={strength}, clip_strength={clip_strength if cur_clip is not None else 'n/a'})")
                 applied += 1
             except Exception as e:
                 print(f"[BSAI_Lora_Stack] 警告: 第 {i} 路加载失败 {name}: {e}")
 
         if applied == 0:
-            print("[BSAI_Lora_Stack] 未启用任何 LoRA，输出原模型")
-        return (cur,)
+            print("[BSAI_Lora_Stack] 未启用任何 LoRA，输出原模型/CLIP")
+        return (cur, cur_clip)
 
 
 NODE_CLASS_MAPPINGS = {
